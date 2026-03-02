@@ -164,34 +164,37 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
             int minutes = (totalSeconds % 3600) / 60;
             int seconds = totalSeconds % 60;
 
-            String status = "📊 *ESP32 Status*\n\n";
-            status += "🔹 *Chip:* " + String(ESP.getChipModel()) + "\n";
-            status += "🔹 *Heap:* " + String(ESP.getFreeHeap() / 1024) + " KB / " + String(ESP.getHeapSize() / 1024) + " KB\n";
-            status += "🔹 *Flash:* " + String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB\n";
-            status += "🔹 *Uptime:* " + String(days) + "d " + String(hours) + "h " + String(minutes) + "m " + String(seconds) + "s\n";
-            status += "🔹 *Bot Name:* " + _bot->userName + "\n";
+            String status = "📊 <b>ESP32 Status</b>\n\n";
+            status += "🔹 <b>Chip:</b> " + String(ESP.getChipModel()) + "\n";
+            status += "🔹 <b>Heap:</b> " + String(ESP.getFreeHeap() / 1024) + " KB / " + String(ESP.getHeapSize() / 1024) + " KB\n";
+            status += "🔹 <b>Flash:</b> " + String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB\n";
+            status += "🔹 <b>Uptime:</b> " + String(days) + "d " + String(hours) + "h " + String(minutes) + "m " + String(seconds) + "s\n";
+            status += "🔹 <b>Bot Name:</b> @" + _bot->userName + "\n";
             
-            bool success = _bot->sendMessage(chatId, status, "Markdown");
+            bool success = _bot->sendMessage(chatId, status, "HTML");
             if (success) Serial.println("Status message sent!");
-            else Serial.println("Failed to send status message!");
+            else {
+                Serial.println("Failed to send status message!");
+                Serial.print("Message was: "); Serial.println(status);
+            }
             matched = true;
         } 
         else if (text == "/help" || text == "/help" + botName || text == "/start" || text == "/start" + botName) {
             Serial.println("Command /help or /start detected!");
-            String help = "🆘 *Available Commands*\n\n";
-            help += "• `/status` - ESP32 stats & uptime\n";
-            help += "• `/help` - Show this list\n\n";
+            String help = "🆘 <b>Available Commands</b>\n\n";
+            help += "• <code>/status</code> - ESP32 stats & uptime\n";
+            help += "• <code>/help</code> - Show this list\n\n";
             
             if (_settings.dynamicCommands.size() > 0) {
-                help += "⚙️ *Dynamic Commands*\n";
+                help += "⚙️ <b>Dynamic Commands</b>\n";
                 for (const auto& cmd : _settings.dynamicCommands) {
-                    help += "• `/" + cmd.command + "`\n";
+                    help += "• <code>/" + cmd.command + "</code>\n";
                 }
             } else {
-                help += "_No dynamic commands configured._";
+                help += "<i>No dynamic commands configured.</i>";
             }
             
-            _bot->sendMessage(chatId, help, "Markdown");
+            _bot->sendMessage(chatId, help, "HTML");
             matched = true;
         }
 
