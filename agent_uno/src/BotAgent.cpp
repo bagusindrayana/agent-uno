@@ -13,6 +13,7 @@ void BotAgent::begin() {
     loadSettings();
     setupWiFi();
     setupWebServer();
+    setupTime();
 
     if (_settings.botToken.length() > 0) {
         _client.setInsecure(); // Simplify SSL for ESP32
@@ -49,6 +50,7 @@ void BotAgent::loadSettings() {
     _settings.aiProvider = (AIProvider)doc["aiProvider"].as<int>();
     _settings.aiApiKey = doc["aiApiKey"].as<String>();
     _settings.aiModel = doc["aiModel"].as<String>();
+    _settings.gmtOffsetSec = doc["gmtOffsetSec"] | 25200; // Default to UTC+7 (Jakarta)
 
     JsonArray cmds = doc["commands"].as<JsonArray>();
     _settings.dynamicCommands.clear();
@@ -73,6 +75,7 @@ void BotAgent::saveSettings() {
     doc["aiProvider"] = (int)_settings.aiProvider;
     doc["aiApiKey"] = _settings.aiApiKey;
     doc["aiModel"] = _settings.aiModel;
+    doc["gmtOffsetSec"] = _settings.gmtOffsetSec;
 
     JsonArray cmds = doc.createNestedArray("commands");
     for (const auto& cmd : _settings.dynamicCommands) {
@@ -139,6 +142,25 @@ void BotAgent::loop() {
     }
 }
 
+void BotAgent::setupTime() {
+    Serial.println("Configuring NTP time...");
+    configTime(_settings.gmtOffsetSec, 0, "pool.ntp.org", "time.nist.gov");
+    
+    // Wait for time to sync
+    struct tm timeinfo;
+    int retry = 0;
+    while (!getLocalTime(&timeinfo) && retry < 10) {
+        Serial.print(".");
+        delay(500);
+        retry++;
+    }
+    if (retry < 10) {
+        Serial.println("\nTime synchronized");
+    } else {
+        Serial.println("\nTime synchronization failed");
+    }
+}
+
 void BotAgent::handleTelegramMessages(int numNewMessages) {
     for (int i = 0; i < numNewMessages; i++) {
         String text = _bot->messages[i].text;
@@ -164,7 +186,15 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
             int minutes = (totalSeconds % 3600) / 60;
             int seconds = totalSeconds % 60;
 
+            // Get Current Time
+            struct tm timeinfo;
+            char timeString[64] = "Not Synchronized";
+            if (getLocalTime(&timeinfo)) {
+                strftime(timeString, sizeof(timeString), "%A, %d %B %Y %H:%M:%S", &timeinfo);
+            }
+
             String status = "📊 <b>ESP32 Status</b>\n\n";
+            status += "🔹 <b>Time:</b> " + String(timeString) + "\n";
             status += "🔹 <b>Chip:</b> " + String(ESP.getChipModel()) + "\n";
             status += "🔹 <b>Heap:</b> " + String(ESP.getFreeHeap() / 1024) + " KB / " + String(ESP.getHeapSize() / 1024) + " KB\n";
             status += "🔹 <b>Flash:</b> " + String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB\n";
@@ -244,6 +274,15 @@ void BotAgent::handleRoot() {
     html += "AI Model: <input name='ai_model' value='" + _settings.aiModel + "' placeholder='e.g. gpt-4, gemini-pro, etc.'>";
     html += "AI API Key: <input name='ai_key' value='" + _settings.aiApiKey + "'>";
     
+    html += "<h2>Time Settings</h2>";
+    html += "Timezone (GMT Offset): <select name='gmt_offset' style='display:block;width:100%;margin:10px 0;padding:10px;'>";
+    for (int i = -12; i <= 14; i++) {
+        long offset = i * 3600;
+        String label = "GMT" + (i >= 0 ? "+" + String(i) : String(i));
+        html += "<option value='" + String(offset) + "'" + String(_settings.gmtOffsetSec == offset ? " selected" : "") + ">" + label + "</option>";
+    }
+    html += "</select>";
+    
     html += "<button type='submit'>Save & Restart</button></form>";
     
     html += "<h2>Commands</h2>";
@@ -271,6 +310,7 @@ void BotAgent::handleSaveSettings() {
     _settings.aiProvider = (AIProvider)_server.arg("ai_provider").toInt();
     _settings.aiApiKey = _server.arg("ai_key");
     _settings.aiModel = _server.arg("ai_model");
+    _settings.gmtOffsetSec = _server.arg("gmt_offset").toInt();
     saveSettings();
     _server.send(200, "text/html", "Settings saved. Restarting... <script>setTimeout(()=>location.href='/', 3000);</script>");
     delay(2000);

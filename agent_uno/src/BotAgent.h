@@ -23,6 +23,7 @@ struct BotSettings {
     AIProvider aiProvider;
     String aiApiKey;
     String aiModel;
+    long gmtOffsetSec;
 };
 
 class BotAgent {
@@ -45,6 +46,7 @@ private:
 
     void setupWiFi();
     void setupWebServer();
+    void setupTime();
     void handleTelegramMessages(int numNewMessages);
     
     // Web Server Handlers
