@@ -17,6 +17,15 @@ void BotAgent::begin() {
     if (_settings.botToken.length() > 0) {
         _client.setInsecure(); // Simplify SSL for ESP32
         _bot = new UniversalTelegramBot(_settings.botToken, _client);
+        
+        // Fetch bot information (username) immediately
+        Serial.println("Fetching Bot Info...");
+        if (_bot->getMe()) {
+            Serial.print("Bot Username: @");
+            Serial.println(_bot->userName);
+        } else {
+            Serial.println("Failed to fetch Bot Info. Token might be invalid.");
+        }
     }
 }
 
@@ -37,6 +46,9 @@ void BotAgent::loadSettings() {
     _settings.wifiSSID = doc["wifiSSID"].as<String>();
     _settings.wifiPassword = doc["wifiPassword"].as<String>();
     _settings.botToken = doc["botToken"].as<String>();
+    _settings.aiProvider = (AIProvider)doc["aiProvider"].as<int>();
+    _settings.aiApiKey = doc["aiApiKey"].as<String>();
+    _settings.aiModel = doc["aiModel"].as<String>();
 
     JsonArray cmds = doc["commands"].as<JsonArray>();
     _settings.dynamicCommands.clear();
@@ -58,6 +70,9 @@ void BotAgent::saveSettings() {
     doc["wifiSSID"] = _settings.wifiSSID;
     doc["wifiPassword"] = _settings.wifiPassword;
     doc["botToken"] = _settings.botToken;
+    doc["aiProvider"] = (int)_settings.aiProvider;
+    doc["aiApiKey"] = _settings.aiApiKey;
+    doc["aiModel"] = _settings.aiModel;
 
     JsonArray cmds = doc.createNestedArray("commands");
     for (const auto& cmd : _settings.dynamicCommands) {
@@ -130,10 +145,19 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
         String chatId = _bot->messages[i].chat_id;
         String fromName = _bot->messages[i].from_name;
 
+        // Serial Log for incoming message
+        Serial.print("\n--- New Telegram Message ---\n");
+        Serial.print("From: "); Serial.println(fromName);
+        Serial.print("ChatID: "); Serial.println(chatId);
+        Serial.print("Text: "); Serial.println(text);
+        Serial.println("---------------------------");
+
         bool matched = false;
+        String botName = "@" + _bot->userName;
 
         // Default Commands
-        if (text == "/status") {
+        if (text == "/status" || text == "/status" + botName) {
+            Serial.println("Command /status detected!");
             unsigned long totalSeconds = millis() / 1000;
             int days = totalSeconds / 86400;
             int hours = (totalSeconds % 86400) / 3600;
@@ -145,12 +169,15 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
             status += "🔹 *Heap:* " + String(ESP.getFreeHeap() / 1024) + " KB / " + String(ESP.getHeapSize() / 1024) + " KB\n";
             status += "🔹 *Flash:* " + String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB\n";
             status += "🔹 *Uptime:* " + String(days) + "d " + String(hours) + "h " + String(minutes) + "m " + String(seconds) + "s\n";
-            status += "🔹 *Bot Name:* " + _bot->userName + "\n"; // userName is populated after first getUpdates or getMe
+            status += "🔹 *Bot Name:* " + _bot->userName + "\n";
             
-            _bot->sendMessage(chatId, status, "Markdown");
+            bool success = _bot->sendMessage(chatId, status, "Markdown");
+            if (success) Serial.println("Status message sent!");
+            else Serial.println("Failed to send status message!");
             matched = true;
         } 
-        else if (text == "/help" || text == "/start") {
+        else if (text == "/help" || text == "/help" + botName || text == "/start" || text == "/start" + botName) {
+            Serial.println("Command /help or /start detected!");
             String help = "🆘 *Available Commands*\n\n";
             help += "• `/status` - ESP32 stats & uptime\n";
             help += "• `/help` - Show this list\n\n";
@@ -171,7 +198,8 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
         // Dynamic Commands (only if not matched by default ones)
         if (!matched) {
             for (const auto& cmd : _settings.dynamicCommands) {
-                if (text == "/" + cmd.command) {
+                String cmdStr = "/" + cmd.command;
+                if (text == cmdStr || text == cmdStr + botName) {
                     _bot->sendMessage(chatId, cmd.response, "");
                     matched = true;
                     break;
@@ -180,7 +208,13 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
         }
 
         if (!matched) {
-            _bot->sendMessage(chatId, "Unknown command. Use /help to see available commands.", "");
+            String aiResponse = _aiHandler.getResponse(text, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
+            if (aiResponse.length() > 0) {
+                _bot->sendMessage(chatId, aiResponse, "");
+                matched = true;
+            } else {
+                _bot->sendMessage(chatId, "Unknown command. Use /help to see available commands.", "");
+            }
         }
     }
 }
@@ -195,6 +229,18 @@ void BotAgent::handleRoot() {
     html += "WiFi SSID: <input name='ssid' value='" + _settings.wifiSSID + "'>";
     html += "WiFi Password: <input name='password' type='password' value='" + _settings.wifiPassword + "'>";
     html += "Bot Token: <input name='token' value='" + _settings.botToken + "'>";
+    
+    html += "<h2>AI Chatbot Settings</h2>";
+    html += "AI Provider: <select name='ai_provider' style='display:block;width:100%;margin:10px 0;padding:10px;'>";
+    html += "<option value='0'" + String(_settings.aiProvider == NONE ? " selected" : "") + ">None</option>";
+    html += "<option value='1'" + String(_settings.aiProvider == OPENAI ? " selected" : "") + ">OpenAI</option>";
+    html += "<option value='2'" + String(_settings.aiProvider == OPENROUTER ? " selected" : "") + ">OpenRouter</option>";
+    html += "<option value='3'" + String(_settings.aiProvider == GEMINI ? " selected" : "") + ">Gemini</option>";
+    html += "<option value='4'" + String(_settings.aiProvider == CLAUDE ? " selected" : "") + ">Claude</option>";
+    html += "</select>";
+    html += "AI Model: <input name='ai_model' value='" + _settings.aiModel + "' placeholder='e.g. gpt-4, gemini-pro, etc.'>";
+    html += "AI API Key: <input name='ai_key' value='" + _settings.aiApiKey + "'>";
+    
     html += "<button type='submit'>Save & Restart</button></form>";
     
     html += "<h2>Commands</h2>";
@@ -219,6 +265,9 @@ void BotAgent::handleSaveSettings() {
     _settings.wifiSSID = _server.arg("ssid");
     _settings.wifiPassword = _server.arg("password");
     _settings.botToken = _server.arg("token");
+    _settings.aiProvider = (AIProvider)_server.arg("ai_provider").toInt();
+    _settings.aiApiKey = _server.arg("ai_key");
+    _settings.aiModel = _server.arg("ai_model");
     saveSettings();
     _server.send(200, "text/html", "Settings saved. Restarting... <script>setTimeout(()=>location.href='/', 3000);</script>");
     delay(2000);
