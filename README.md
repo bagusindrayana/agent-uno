@@ -20,7 +20,7 @@ ai agent that run in esp32
 ### Todo
 - [x] telegram bot
 - [x] ai chat
-- [ ] ai memory
+- [x] ai memory
 - [ ] tool call
     - [ ] web search
     - [ ] cronjob

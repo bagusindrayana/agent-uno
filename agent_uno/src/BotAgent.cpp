@@ -227,6 +227,12 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
             _bot->sendMessage(chatId, help, "HTML");
             matched = true;
         }
+        else if (text == "/clear" || text == "/clear" + botName) {
+            Serial.println("Command /clear detected!");
+            _aiHandler.clearHistory();
+            _bot->sendMessage(chatId, "🧹 <b>AI Chat History Cleared!</b>", "HTML");
+            matched = true;
+        }
 
         // Dynamic Commands (only if not matched by default ones)
         if (!matched) {

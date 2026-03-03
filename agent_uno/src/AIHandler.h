@@ -14,16 +14,26 @@ enum AIProvider {
     CLAUDE
 };
 
+struct AIMessage {
+    String role;
+    String content;
+};
+
 class AIHandler {
 public:
     AIHandler();
     String getResponse(String userMessage, AIProvider provider, String apiKey, String model);
+    void clearHistory();
 
 private:
-    String callOpenAI(String message, String apiKey, String model);
-    String callOpenRouter(String message, String apiKey, String model);
-    String callGemini(String message, String apiKey, String model);
-    String callClaude(String message, String apiKey, String model);
+    std::vector<AIMessage> _history;
+    const size_t _maxHistory = 10; // Max 5 turns (5 user, 5 assistant)
+
+    void addMessage(String role, String content);
+    String callOpenAI(String apiKey, String model);
+    String callOpenRouter(String apiKey, String model);
+    String callGemini(String apiKey, String model);
+    String callClaude(String apiKey, String model);
 };
 
 #endif

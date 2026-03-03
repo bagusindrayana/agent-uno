@@ -5,16 +5,36 @@ AIHandler::AIHandler() {}
 String AIHandler::getResponse(String userMessage, AIProvider provider, String apiKey, String model) {
     if (apiKey.length() == 0 || provider == NONE) return "";
 
+    addMessage("user", userMessage);
+
+    String result = "";
     switch (provider) {
-        case OPENAI: return callOpenAI(userMessage, apiKey, model);
-        case OPENROUTER: return callOpenRouter(userMessage, apiKey, model);
-        case GEMINI: return callGemini(userMessage, apiKey, model);
-        case CLAUDE: return callClaude(userMessage, apiKey, model);
-        default: return "";
+        case OPENAI: result = callOpenAI(apiKey, model); break;
+        case OPENROUTER: result = callOpenRouter(apiKey, model); break;
+        case GEMINI: result = callGemini(apiKey, model); break;
+        case CLAUDE: result = callClaude(apiKey, model); break;
+        default: break;
+    }
+
+    if (result.length() > 0 && !result.startsWith("Error:")) {
+        addMessage("assistant", result);
+    }
+    return result;
+}
+
+void AIHandler::clearHistory() {
+    _history.clear();
+    Serial.println("AI Chat History Cleared");
+}
+
+void AIHandler::addMessage(String role, String content) {
+    _history.push_back({role, content});
+    if (_history.size() > _maxHistory) {
+        _history.erase(_history.begin());
     }
 }
 
-String AIHandler::callOpenAI(String message, String apiKey, String model) {
+String AIHandler::callOpenAI(String apiKey, String model) {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
@@ -25,9 +45,11 @@ String AIHandler::callOpenAI(String message, String apiKey, String model) {
     JsonDocument doc;
     doc["model"] = model.length() > 0 ? model : "gpt-3.5-turbo";
     JsonArray messages = doc.createNestedArray("messages");
-    JsonObject msg = messages.createNestedObject();
-    msg["role"] = "user";
-    msg["content"] = message;
+    for (const auto& msg : _history) {
+        JsonObject m = messages.createNestedObject();
+        m["role"] = msg.role;
+        m["content"] = msg.content;
+    }
 
     String json;
     serializeJson(doc, json);
@@ -37,7 +59,6 @@ String AIHandler::callOpenAI(String message, String apiKey, String model) {
     if (httpResponseCode > 0) {
         String response = http.getString();
         Serial.print("OpenAI Response: "); Serial.println(response);
-        
         JsonDocument resDoc;
         deserializeJson(resDoc, response);
         result = resDoc["choices"][0]["message"]["content"].as<String>();
@@ -49,7 +70,7 @@ String AIHandler::callOpenAI(String message, String apiKey, String model) {
     return result;
 }
 
-String AIHandler::callOpenRouter(String message, String apiKey, String model) {
+String AIHandler::callOpenRouter(String apiKey, String model) {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
@@ -61,9 +82,11 @@ String AIHandler::callOpenRouter(String message, String apiKey, String model) {
     JsonDocument doc;
     doc["model"] = model.length() > 0 ? model : "google/gemini-2.0-flash-001";
     JsonArray messages = doc.createNestedArray("messages");
-    JsonObject msg = messages.createNestedObject();
-    msg["role"] = "user";
-    msg["content"] = message;
+    for (const auto& msg : _history) {
+        JsonObject m = messages.createNestedObject();
+        m["role"] = msg.role;
+        m["content"] = msg.content;
+    }
 
     String json;
     serializeJson(doc, json);
@@ -72,31 +95,25 @@ String AIHandler::callOpenRouter(String message, String apiKey, String model) {
     String result = "";
     if (httpResponseCode > 0) {
         String response = http.getString();
-        Serial.print("OpenRouter Response: "); Serial.println(response); // Debug log
-        
+        Serial.print("OpenRouter Response: "); Serial.println(response);
         JsonDocument resDoc;
         DeserializationError error = deserializeJson(resDoc, response);
         if (error) {
             result = "Error: Failed to parse OpenRouter JSON (" + String(error.c_str()) + ")";
         } else if (resDoc.containsKey("choices") && resDoc["choices"].is<JsonArray>() && resDoc["choices"].size() > 0) {
             result = resDoc["choices"][0]["message"]["content"].as<String>();
-            if (result == "null" || result == "") {
-                result = "Error: OpenRouter returned empty/null content";
-            }
-        } else if (resDoc.containsKey("error")) {
-            result = "Error from OpenRouter: " + resDoc["error"]["message"].as<String>();
         } else {
             result = "Error: Unexpected OpenRouter response structure";
         }
     } else {
-        result = "Error: OpenRouter request failed (Code: " + String(httpResponseCode) + ")";
+        result = "Error: OpenRouter request failed (" + String(httpResponseCode) + ")";
         Serial.print("OpenRouter Error: "); Serial.println(http.errorToString(httpResponseCode));
     }
     http.end();
     return result;
 }
 
-String AIHandler::callGemini(String message, String apiKey, String model) {
+String AIHandler::callGemini(String apiKey, String model) {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
@@ -107,10 +124,13 @@ String AIHandler::callGemini(String message, String apiKey, String model) {
 
     JsonDocument doc;
     JsonArray contents = doc.createNestedArray("contents");
-    JsonObject contentObj = contents.createNestedObject();
-    JsonArray parts = contentObj.createNestedArray("parts");
-    JsonObject partObj = parts.createNestedObject();
-    partObj["text"] = message;
+    for (const auto& msg : _history) {
+        JsonObject contentObj = contents.createNestedObject();
+        contentObj["role"] = (msg.role == "assistant") ? "model" : "user";
+        JsonArray parts = contentObj.createNestedArray("parts");
+        JsonObject partObj = parts.createNestedObject();
+        partObj["text"] = msg.content;
+    }
 
     String json;
     serializeJson(doc, json);
@@ -120,7 +140,6 @@ String AIHandler::callGemini(String message, String apiKey, String model) {
     if (httpResponseCode > 0) {
         String response = http.getString();
         Serial.print("Gemini Response: "); Serial.println(response);
-        
         JsonDocument resDoc;
         deserializeJson(resDoc, response);
         result = resDoc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
@@ -132,7 +151,7 @@ String AIHandler::callGemini(String message, String apiKey, String model) {
     return result;
 }
 
-String AIHandler::callClaude(String message, String apiKey, String model) {
+String AIHandler::callClaude(String apiKey, String model) {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
@@ -145,9 +164,11 @@ String AIHandler::callClaude(String message, String apiKey, String model) {
     doc["model"] = model.length() > 0 ? model : "claude-3-haiku-20240307";
     doc["max_tokens"] = 1024;
     JsonArray messages = doc.createNestedArray("messages");
-    JsonObject msg = messages.createNestedObject();
-    msg["role"] = "user";
-    msg["content"] = message;
+    for (const auto& msg : _history) {
+        JsonObject m = messages.createNestedObject();
+        m["role"] = msg.role;
+        m["content"] = msg.content;
+    }
 
     String json;
     serializeJson(doc, json);
@@ -157,7 +178,6 @@ String AIHandler::callClaude(String message, String apiKey, String model) {
     if (httpResponseCode > 0) {
         String response = http.getString();
         Serial.print("Claude Response: "); Serial.println(response);
-        
         JsonDocument resDoc;
         deserializeJson(resDoc, response);
         result = resDoc["content"][0]["text"].as<String>();
