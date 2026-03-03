@@ -125,6 +125,60 @@ String BotAgent::executeTool(String functionName, String args) {
         }
         return "Success: File written: " + filename;
     }
+    else if (functionName == "http_request") {
+        String url = doc["url"].as<String>();
+        String method = doc["method"].as<String>();
+        String headersStr = doc["headers"].as<String>();
+        String body = doc["body"].as<String>();
+
+        if (url.length() == 0 || method.length() == 0) {
+            return "Error: 'url' and 'method' are required for http_request.";
+        }
+
+        HTTPClient http;
+        WiFiClientSecure client;
+        client.setInsecure(); // Allow insecure connections for simplicity
+
+        if (url.startsWith("https://")) {
+            http.begin(client, url);
+        } else {
+            http.begin(url);
+        }
+
+        // Parse and add headers
+        if (headersStr.length() > 0) {
+            JsonDocument headersDoc;
+            deserializeJson(headersDoc, headersStr);
+            JsonObject headersObj = headersDoc.as<JsonObject>();
+            for (JsonPair kv : headersObj) {
+                http.addHeader(kv.key().c_str(), kv.value().as<String>());
+            }
+        }
+
+        int httpCode = 0;
+        if (method.equalsIgnoreCase("GET")) {
+            httpCode = http.GET();
+        } else if (method.equalsIgnoreCase("POST")) {
+            httpCode = http.POST(body);
+        } else {
+            http.end();
+            return "Error: Unsupported HTTP method: " + method;
+        }
+
+        if (httpCode > 0) {
+            String payload = http.getString();
+            http.end();
+            // Truncate if too long to avoid overwhelming the AI context
+            if (payload.length() > 2000) {
+                payload = payload.substring(0, 2000) + "\n... (truncated)";
+            }
+            return "Status: " + String(httpCode) + ", Response: " + payload;
+        } else {
+            String errorMsg = "Error: HTTP request failed. Code: " + String(httpCode) + ", " + http.errorToString(httpCode);
+            http.end();
+            return errorMsg;
+        }
+    }
 
     return "Error: Unknown tool";
 }

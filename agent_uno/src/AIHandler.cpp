@@ -77,6 +77,40 @@ static void addTools(JsonDocument& doc) {
     JsonArray req2 = params2.createNestedArray("required");
     req2.add("filename");
     req2.add("content");
+
+    // HTTP Request Tool
+    JsonObject tool3 = tools.createNestedObject();
+    tool3["type"] = "function";
+    JsonObject func3 = tool3.createNestedObject("function");
+    func3["name"] = "http_request";
+    func3["description"] = "Make an HTTP request to a specified URL. Can be used to fetch data from APIs or web pages.";
+    JsonObject params3 = func3.createNestedObject("parameters");
+    params3["type"] = "object";
+    JsonObject props3 = params3.createNestedObject("properties");
+
+    JsonObject url3 = props3.createNestedObject("url");
+    url3["type"] = "string";
+    url3["description"] = "The full URL to make the request to.";
+
+    JsonObject method3 = props3.createNestedObject("method");
+    method3["type"] = "string";
+    method3["description"] = "The HTTP method to use (e.g., GET, POST).";
+    
+    JsonArray methods = method3.createNestedArray("enum");
+    methods.add("GET");
+    methods.add("POST");
+
+    JsonObject headers3 = props3.createNestedObject("headers");
+    headers3["type"] = "string";
+    headers3["description"] = "Optional. A JSON string representing key-value pairs for headers (e.g., '{\"Content-Type\":\"application/json\"}').";
+
+    JsonObject body3 = props3.createNestedObject("body");
+    body3["type"] = "string";
+    body3["description"] = "Optional. The request body, typically for POST requests.";
+
+    JsonArray req3 = params3.createNestedArray("required");
+    req3.add("url");
+    req3.add("method");
 }
 
 AIResponse AIHandler::callOpenAI(std::vector<AIMessage> messages, String apiKey, String model) {
