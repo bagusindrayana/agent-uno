@@ -179,8 +179,81 @@ String BotAgent::executeTool(String functionName, String args) {
             return errorMsg;
         }
     }
+    else if (functionName == "web_search") {
+        String query = doc["query"].as<String>();
+        if (query.length() == 0) return "Error: 'query' is required for web_search.";
+        if (_settings.searchProvider == SEARCH_NONE || _settings.searchApiKey.length() == 0) {
+            return "Error: Web Search provider or API key is not configured in settings.";
+        }
+
+        HTTPClient http;
+        WiFiClientSecure client;
+        client.setInsecure();
+
+        int httpCode = 0;
+        String payload = "";
+
+        if (_settings.searchProvider == TAVILY) {
+            http.begin(client, "https://api.tavily.com/search");
+            http.addHeader("Content-Type", "application/json");
+            JsonDocument searchDoc;
+            searchDoc["api_key"] = _settings.searchApiKey;
+            searchDoc["query"] = query;
+            String json;
+            serializeJson(searchDoc, json);
+            httpCode = http.POST(json);
+        }
+        else if (_settings.searchProvider == BRAVE) {
+            String url = "https://api.search.brave.com/res/v1/web/search?q=" + urlEncode(query);
+            http.begin(client, url);
+            http.addHeader("X-Subscription-Token", _settings.searchApiKey);
+            httpCode = http.GET();
+        }
+        else if (_settings.searchProvider == DUCKDUCKGO) {
+            String url = "https://www.searchapi.io/api/v1/search?engine=duckduckgo&q=" + urlEncode(query) + "&api_key=" + _settings.searchApiKey;
+            http.begin(client, url);
+            httpCode = http.GET();
+        }
+
+        if (httpCode > 0) {
+            payload = http.getString();
+            http.end();
+            if (payload.length() > 3000) payload = payload.substring(0, 3000) + "... (truncated)";
+            return payload;
+        } else {
+            String err = "Error: Search failed (" + String(httpCode) + "): " + http.errorToString(httpCode);
+            http.end();
+            return err;
+        }
+    }
 
     return "Error: Unknown tool";
+}
+
+// Simple URL encode helper
+String BotAgent::urlEncode(String str) {
+    String encoded = "";
+    char c;
+    char code0;
+    char code1;
+    for (int i = 0; i < str.length(); i++) {
+        c = str.charAt(i);
+        if (isalnum(c)) {
+            encoded += c;
+        } else if (c == ' ') {
+            encoded += '+';
+        } else {
+            code1 = (c & 0xf) + '0';
+            if ((c & 0xf) > 9) code1 = (c & 0xf) - 10 + 'A';
+            c = (c >> 4) & 0xf;
+            code0 = c + '0';
+            if (c > 9) code0 = c - 10 + 'A';
+            encoded += '%';
+            encoded += code0;
+            encoded += code1;
+        }
+    }
+    return encoded;
 }
 
 void BotAgent::loadSettings() {
@@ -204,6 +277,8 @@ void BotAgent::loadSettings() {
     _settings.aiApiKey = doc["aiApiKey"].as<String>();
     _settings.aiModel = doc["aiModel"].as<String>();
     _settings.gmtOffsetSec = doc["gmtOffsetSec"] | 25200; // Default to UTC+7 (Jakarta)
+    _settings.searchProvider = (SearchProvider)(doc["searchProvider"] | 0);
+    _settings.searchApiKey = doc["searchApiKey"].as<String>();
 
     JsonArray cmds = doc["commands"].as<JsonArray>();
     _settings.dynamicCommands.clear();
@@ -229,6 +304,8 @@ void BotAgent::saveSettings() {
     doc["aiApiKey"] = _settings.aiApiKey;
     doc["aiModel"] = _settings.aiModel;
     doc["gmtOffsetSec"] = _settings.gmtOffsetSec;
+    doc["searchProvider"] = (int)_settings.searchProvider;
+    doc["searchApiKey"] = _settings.searchApiKey;
 
     JsonArray cmds = doc.createNestedArray("commands");
     for (const auto& cmd : _settings.dynamicCommands) {
@@ -449,6 +526,15 @@ void BotAgent::handleRoot() {
     html += "AI Model: <input name='ai_model' value='" + _settings.aiModel + "' placeholder='e.g. gpt-4, gemini-pro, etc.'>";
     html += "AI API Key: <input name='ai_key' value='" + _settings.aiApiKey + "'>";
     
+    html += "<h2>Web Search Settings</h2>";
+    html += "Search Provider: <select name='search_provider' style='display:block;width:100%;margin:10px 0;padding:10px;'>";
+    html += "<option value='0'" + String(_settings.searchProvider == SEARCH_NONE ? " selected" : "") + ">None</option>";
+    html += "<option value='1'" + String(_settings.searchProvider == TAVILY ? " selected" : "") + ">Tavily</option>";
+    html += "<option value='2'" + String(_settings.searchProvider == BRAVE ? " selected" : "") + ">Brave Search</option>";
+    html += "<option value='3'" + String(_settings.searchProvider == DUCKDUCKGO ? " selected" : "") + ">DuckDuckGo (SearchAPI.io)</option>";
+    html += "</select>";
+    html += "Search API Key: <input name='search_key' value='" + _settings.searchApiKey + "'>";
+
     html += "<h2>Time Settings</h2>";
     html += "Timezone (GMT Offset): <select name='gmt_offset' style='display:block;width:100%;margin:10px 0;padding:10px;'>";
     for (int i = -12; i <= 14; i++) {
@@ -485,6 +571,8 @@ void BotAgent::handleSaveSettings() {
     _settings.aiProvider = (AIProvider)_server.arg("ai_provider").toInt();
     _settings.aiApiKey = _server.arg("ai_key");
     _settings.aiModel = _server.arg("ai_model");
+    _settings.searchProvider = (SearchProvider)_server.arg("search_provider").toInt();
+    _settings.searchApiKey = _server.arg("search_key");
     _settings.gmtOffsetSec = _server.arg("gmt_offset").toInt();
     saveSettings();
     _server.send(200, "text/html", "Settings saved. Restarting... <script>setTimeout(()=>location.href='/', 3000);</script>");

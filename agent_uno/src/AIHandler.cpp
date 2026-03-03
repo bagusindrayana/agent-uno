@@ -111,6 +111,21 @@ static void addTools(JsonDocument& doc) {
     JsonArray req3 = params3.createNestedArray("required");
     req3.add("url");
     req3.add("method");
+
+    // Web Search Tool
+    JsonObject tool4 = tools.createNestedObject();
+    tool4["type"] = "function";
+    JsonObject func4 = tool4.createNestedObject("function");
+    func4["name"] = "web_search";
+    func4["description"] = "Search the internet for real-time information or answers to questions.";
+    JsonObject params4 = func4.createNestedObject("parameters");
+    params4["type"] = "object";
+    JsonObject props4 = params4.createNestedObject("properties");
+    JsonObject query4 = props4.createNestedObject("query");
+    query4["type"] = "string";
+    query4["description"] = "The search query (e.g. 'current weather in Jakarta', 'who is Leo Messi?')";
+    JsonArray req4 = params4.createNestedArray("required");
+    req4.add("query");
 }
 
 AIResponse AIHandler::callOpenAI(std::vector<AIMessage> messages, String apiKey, String model) {

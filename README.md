@@ -28,7 +28,7 @@ ai agent that run in esp32
 - [x] ai chat
 - [x] ai memory
 - [x] tool call
-    - [ ] web search
+    - [x] web search
     - [ ] cronjob
     - [x] read/write file
     - [ ] scrape web

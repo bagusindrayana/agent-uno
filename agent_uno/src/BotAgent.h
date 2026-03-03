@@ -30,6 +30,8 @@ struct BotSettings {
     String aiApiKey;
     String aiModel;
     long gmtOffsetSec;
+    SearchProvider searchProvider;
+    String searchApiKey;
     BotProfile profile;
 };
 
@@ -69,6 +71,7 @@ private:
 
     // Tool Handlers
     String executeTool(String functionName, String args);
+    String urlEncode(String str);
 };
 
 #endif

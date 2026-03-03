@@ -14,6 +14,13 @@ enum AIProvider {
     CLAUDE
 };
 
+enum SearchProvider {
+    SEARCH_NONE = 0,
+    TAVILY,
+    BRAVE,
+    DUCKDUCKGO
+};
+
 #include <vector>
 
 struct AIMessage {
