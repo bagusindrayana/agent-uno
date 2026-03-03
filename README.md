@@ -16,6 +16,12 @@ ai agent that run in esp32
 11. top open web ui again open new ip show in serial monitor
 
 
+### Command Bot
+- /start: start the bot
+- /status: show bot and esp32 status
+- /help: show this help message
+- /clear: clear ai memory
+
 
 ### Todo
 - [x] telegram bot
