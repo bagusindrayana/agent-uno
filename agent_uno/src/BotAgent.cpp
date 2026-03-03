@@ -1,6 +1,6 @@
 #include "BotAgent.h"
 
-BotAgent::BotAgent() : _server(80), _lastBotCheck(0), _botCheckInterval(1000) {
+BotAgent::BotAgent() : _server(80), _lastBotCheck(0), _botCheckInterval(1000), _lastSystemInfoUpdate(0) {
     _bot = nullptr;
 }
 
@@ -11,9 +11,10 @@ void BotAgent::begin() {
     }
 
     loadSettings();
+    loadProfile();
     setupWiFi();
     setupWebServer();
-    setupTime();
+    setupNTP();
 
     if (_settings.botToken.length() > 0) {
         _client.setInsecure(); // Simplify SSL for ESP32
@@ -28,6 +29,104 @@ void BotAgent::begin() {
             Serial.println("Failed to fetch Bot Info. Token might be invalid.");
         }
     }
+}
+
+void BotAgent::loadProfile() {
+    File file = LittleFS.open("/profile.json", "r");
+    if (!file) {
+        Serial.println("No profile file found. Creating default.");
+        _settings.profile.botName = "ESP32 Bot Agent";
+        _settings.profile.systemPrompt = "You are a helpful AI assistant running on an ESP32 microcontroller. You have access to local files and hardware.";
+        saveProfile();
+        return;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    if (error) {
+        Serial.println("Failed to read profile file");
+        return;
+    }
+
+    _settings.profile.botName = doc["botName"].as<String>();
+    _settings.profile.systemPrompt = doc["systemPrompt"].as<String>();
+    file.close();
+}
+
+void BotAgent::saveProfile() {
+    File file = LittleFS.open("/profile.json", "w");
+    if (!file) {
+        Serial.println("Failed to open profile file for writing");
+        return;
+    }
+
+    JsonDocument doc;
+    doc["botName"] = _settings.profile.botName;
+    doc["systemPrompt"] = _settings.profile.systemPrompt;
+
+    serializeJson(doc, file);
+    file.close();
+}
+
+void BotAgent::setupNTP() {
+    configTime(_settings.gmtOffsetSec, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.println("NTP Configured with Offset: " + String(_settings.gmtOffsetSec));
+}
+
+String BotAgent::getSystemInfo() {
+    struct tm timeinfo;
+    char timeStr[64];
+    if (getLocalTime(&timeinfo)) {
+        strftime(timeStr, sizeof(timeStr), "%A, %B %d %Y %H:%M:%S", &timeinfo);
+    } else {
+        strcpy(timeStr, "Time not synced");
+    }
+
+    unsigned long totalSeconds = millis() / 1000;
+    int days = totalSeconds / 86400;
+    int hours = (totalSeconds % 86400) / 3600;
+    int minutes = (totalSeconds % 3600) / 60;
+    int seconds = totalSeconds % 60;
+
+    String info = "\n--- System Info ---\n";
+    info += "Current Time: " + String(timeStr) + "\n";
+    info += "Uptime: " + String(days) + "d " + String(hours) + "h " + String(minutes) + "m " + String(seconds) + "s\n";
+    info += "Free Heap: " + String(ESP.getFreeHeap() / 1024) + " KB\n";
+    info += "Chip Model: " + String(ESP.getChipModel()) + "\n";
+    info += "Bot Name: " + _settings.profile.botName + "\n";
+    return info;
+}
+
+String BotAgent::executeTool(String functionName, String args) {
+    JsonDocument doc;
+    deserializeJson(doc, args);
+
+    if (functionName == "read_file") {
+        String filename = doc["filename"].as<String>();
+        if (!filename.startsWith("/")) filename = "/" + filename;
+        File file = LittleFS.open(filename, "r");
+        if (!file) return "Error: File not found: " + filename;
+        String content = file.readString();
+        file.close();
+        return content;
+    } 
+    else if (functionName == "write_file") {
+        String filename = doc["filename"].as<String>();
+        if (!filename.startsWith("/")) filename = "/" + filename;
+        String content = doc["content"].as<String>();
+        File file = LittleFS.open(filename, "w");
+        if (!file) return "Error: Could not open file for writing: " + filename;
+        file.print(content);
+        file.close();
+        
+        // If we updated profile.json, reload it
+        if (filename == "/profile.json") {
+            loadProfile();
+        }
+        return "Success: File written: " + filename;
+    }
+
+    return "Error: Unknown tool";
 }
 
 void BotAgent::loadSettings() {
@@ -142,25 +241,6 @@ void BotAgent::loop() {
     }
 }
 
-void BotAgent::setupTime() {
-    Serial.println("Configuring NTP time...");
-    configTime(_settings.gmtOffsetSec, 0, "pool.ntp.org", "time.nist.gov");
-    
-    // Wait for time to sync
-    struct tm timeinfo;
-    int retry = 0;
-    while (!getLocalTime(&timeinfo) && retry < 10) {
-        Serial.print(".");
-        delay(500);
-        retry++;
-    }
-    if (retry < 10) {
-        Serial.println("\nTime synchronized");
-    } else {
-        Serial.println("\nTime synchronization failed");
-    }
-}
-
 void BotAgent::handleTelegramMessages(int numNewMessages) {
     for (int i = 0; i < numNewMessages; i++) {
         String text = _bot->messages[i].text;
@@ -227,6 +307,7 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
             _bot->sendMessage(chatId, help, "HTML");
             matched = true;
         }
+
         else if (text == "/clear" || text == "/clear" + botName) {
             Serial.println("Command /clear detected!");
             _aiHandler.clearHistory();
@@ -247,12 +328,46 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
         }
 
         if (!matched) {
-            String aiResponse = _aiHandler.getResponse(text, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
-            if (aiResponse.length() > 0) {
-                _bot->sendMessage(chatId, aiResponse, "");
-                matched = true;
-            } else {
-                _bot->sendMessage(chatId, "Unknown command. Use /help to see available commands.", "");
+            String fullSystemPrompt = _settings.profile.systemPrompt + "\n\n" + getSystemInfo();
+            
+            // 1. Initial Call
+            AIResponse aiRes = _aiHandler.getResponse(text, fullSystemPrompt, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
+            
+            // 2. Persistent User Message
+            _aiHandler.addMessage({ "user", text, "", "", "" });
+
+            int maxTurns = 5; 
+            for (int turn = 0; turn < maxTurns; turn++) {
+                if (aiRes.toolCalls.size() > 0) {
+                    // 3. Add assistant's tool call to persistent history
+                    _aiHandler.addMessage({ "assistant", aiRes.content, "", "", aiRes.toolCallsJson }); 
+                    
+                    for (const auto& tc : aiRes.toolCalls) {
+                        String result = executeTool(tc.name, tc.arguments);
+                        // 4. Add tool result to persistent history
+                        _aiHandler.addMessage({ "tool", result, tc.name, tc.id, "" });
+                    }
+                    
+                    // 5. Follow-up Call (without adding new user message)
+                    // We need a way to call AI with current history only.
+                    // Let's call getResponse with empty user message? No, that adds an empty user msg.
+                    // I'll add a continueResponse() method to AIHandler.
+                    aiRes = _aiHandler.getResponse("", fullSystemPrompt, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
+                } else {
+                    // Final answer
+                    if (aiRes.content.length() > 0) {
+                        _aiHandler.addMessage({ "assistant", aiRes.content, "", "", "" });
+                        _bot->sendMessage(chatId, aiRes.content, "");
+                    } else {
+                        _bot->sendMessage(chatId, "I executed the tools but have nothing more to say.", "");
+                    }
+                    matched = true;
+                    break; 
+                }
+            }
+
+            if (!matched) {
+                _bot->sendMessage(chatId, "I seem to be stuck in a loop of tool calls. Please try a different command.", "");
             }
         }
     }

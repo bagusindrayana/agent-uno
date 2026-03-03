@@ -14,26 +14,43 @@ enum AIProvider {
     CLAUDE
 };
 
+#include <vector>
+
 struct AIMessage {
     String role;
     String content;
+    String name;
+    String tool_call_id;
+    String tool_calls_json; // To store the tool_calls array for assistant messages
+};
+
+struct ToolCall {
+    String id;
+    String name;
+    String arguments;
+};
+
+struct AIResponse {
+    String content;
+    std::vector<ToolCall> toolCalls;
+    String toolCallsJson; // Store the original tool_calls JSON array
 };
 
 class AIHandler {
 public:
     AIHandler();
-    String getResponse(String userMessage, AIProvider provider, String apiKey, String model);
+    AIResponse getResponse(String userMessage, String systemPrompt, AIProvider provider, String apiKey, String model);
     void clearHistory();
+    void addMessage(AIMessage msg);
 
 private:
     std::vector<AIMessage> _history;
-    const size_t _maxHistory = 10; // Max 5 turns (5 user, 5 assistant)
+    const size_t _maxHistory = 15; // Set higher to accommodate tool calls
 
-    void addMessage(String role, String content);
-    String callOpenAI(String apiKey, String model);
-    String callOpenRouter(String apiKey, String model);
-    String callGemini(String apiKey, String model);
-    String callClaude(String apiKey, String model);
+    AIResponse callOpenAI(std::vector<AIMessage> messages, String apiKey, String model);
+    AIResponse callOpenRouter(std::vector<AIMessage> messages, String apiKey, String model);
+    AIResponse callGemini(std::vector<AIMessage> messages, String apiKey, String model);
+    AIResponse callClaude(std::vector<AIMessage> messages, String apiKey, String model);
 };
 
 #endif

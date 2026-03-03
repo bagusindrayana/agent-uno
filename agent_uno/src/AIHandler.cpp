@@ -2,24 +2,40 @@
 
 AIHandler::AIHandler() {}
 
-String AIHandler::getResponse(String userMessage, AIProvider provider, String apiKey, String model) {
-    if (apiKey.length() == 0 || provider == NONE) return "";
+AIResponse AIHandler::getResponse(String userMessage, String systemPrompt, AIProvider provider, String apiKey, String model) {
+    if (apiKey.length() == 0 || provider == NONE) return {"", {}};
 
-    addMessage("user", userMessage);
+    // Prepare full message list with system prompt
+    std::vector<AIMessage> fullMessages;
+    if (systemPrompt.length() > 0) {
+        fullMessages.push_back({ "system", systemPrompt, "", "", "" });
+    }
+    for (const auto& msg : _history) {
+        fullMessages.push_back(msg);
+    }
+    
+    // Add the current user message if provided (don't add to persistent history yet, BotAgent will do it)
+    if (userMessage.length() > 0) {
+        fullMessages.push_back({ "user", userMessage, "", "", "" });
+    }
 
-    String result = "";
+    AIResponse res;
     switch (provider) {
-        case OPENAI: result = callOpenAI(apiKey, model); break;
-        case OPENROUTER: result = callOpenRouter(apiKey, model); break;
-        case GEMINI: result = callGemini(apiKey, model); break;
-        case CLAUDE: result = callClaude(apiKey, model); break;
-        default: break;
+        case OPENAI: res = callOpenAI(fullMessages, apiKey, model); break;
+        case OPENROUTER: res = callOpenRouter(fullMessages, apiKey, model); break;
+        case GEMINI: res = callGemini(fullMessages, apiKey, model); break;
+        case CLAUDE: res = callClaude(fullMessages, apiKey, model); break;
+        default: return {"", {}};
     }
+    
+    return res;
+}
 
-    if (result.length() > 0 && !result.startsWith("Error:")) {
-        addMessage("assistant", result);
+void AIHandler::addMessage(AIMessage msg) {
+    _history.push_back(msg);
+    if (_history.size() > _maxHistory) {
+        _history.erase(_history.begin());
     }
-    return result;
 }
 
 void AIHandler::clearHistory() {
@@ -27,14 +43,43 @@ void AIHandler::clearHistory() {
     Serial.println("AI Chat History Cleared");
 }
 
-void AIHandler::addMessage(String role, String content) {
-    _history.push_back({role, content});
-    if (_history.size() > _maxHistory) {
-        _history.erase(_history.begin());
-    }
+static void addTools(JsonDocument& doc) {
+    JsonArray tools = doc.createNestedArray("tools");
+    
+    // Read File Tool
+    JsonObject tool1 = tools.createNestedObject();
+    tool1["type"] = "function";
+    JsonObject func1 = tool1.createNestedObject("function");
+    func1["name"] = "read_file";
+    func1["description"] = "Read content from a local file on ESP32 LittleFS";
+    JsonObject params1 = func1.createNestedObject("parameters");
+    params1["type"] = "object";
+    JsonObject props1 = params1.createNestedObject("properties");
+    JsonObject filename1 = props1.createNestedObject("filename");
+    filename1["type"] = "string";
+    filename1["description"] = "The name of the file to read (e.g. /profile.json)";
+    JsonArray req1 = params1.createNestedArray("required");
+    req1.add("filename");
+
+    // Write File Tool
+    JsonObject tool2 = tools.createNestedObject();
+    tool2["type"] = "function";
+    JsonObject func2 = tool2.createNestedObject("function");
+    func2["name"] = "write_file";
+    func2["description"] = "Write content to a local file on ESP32 LittleFS";
+    JsonObject params2 = func2.createNestedObject("parameters");
+    params2["type"] = "object";
+    JsonObject props2 = params2.createNestedObject("properties");
+    JsonObject filename2 = props2.createNestedObject("filename");
+    filename2["type"] = "string";
+    JsonObject content2 = props2.createNestedObject("content");
+    content2["type"] = "string";
+    JsonArray req2 = params2.createNestedArray("required");
+    req2.add("filename");
+    req2.add("content");
 }
 
-String AIHandler::callOpenAI(String apiKey, String model) {
+AIResponse AIHandler::callOpenAI(std::vector<AIMessage> messages, String apiKey, String model) {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
@@ -44,33 +89,66 @@ String AIHandler::callOpenAI(String apiKey, String model) {
 
     JsonDocument doc;
     doc["model"] = model.length() > 0 ? model : "gpt-3.5-turbo";
-    JsonArray messages = doc.createNestedArray("messages");
-    for (const auto& msg : _history) {
-        JsonObject m = messages.createNestedObject();
+    JsonArray msgs = doc.createNestedArray("messages");
+    for (const auto& msg : messages) {
+        JsonObject m = msgs.createNestedObject();
         m["role"] = msg.role;
-        m["content"] = msg.content;
+        if (msg.content.length() > 0) {
+            m["content"] = msg.content;
+        } else {
+            m["content"] = nullptr; // OpenAI requires content to be null if tool_calls are present
+        }
+
+        if (msg.role == "assistant" && msg.tool_calls_json.length() > 0) {
+            JsonDocument tcDoc;
+            deserializeJson(tcDoc, msg.tool_calls_json);
+            m["tool_calls"] = tcDoc.as<JsonArray>();
+        }
+
+        if (msg.role == "tool") {
+            m["tool_call_id"] = msg.tool_call_id;
+            m["name"] = msg.name;
+        }
     }
+
+    addTools(doc);
 
     String json;
     serializeJson(doc, json);
     int httpResponseCode = http.POST(json);
 
-    String result = "";
+    AIResponse result = {"", {}};
     if (httpResponseCode > 0) {
         String response = http.getString();
-        Serial.print("OpenAI Response: "); Serial.println(response);
         JsonDocument resDoc;
         deserializeJson(resDoc, response);
-        result = resDoc["choices"][0]["message"]["content"].as<String>();
+        
+        JsonObject choice = resDoc["choices"][0];
+        JsonObject resMsg = choice["message"];
+        
+        if (resMsg.containsKey("content") && !resMsg["content"].isNull()) {
+            result.content = resMsg["content"].as<String>();
+        }
+
+        if (resMsg.containsKey("tool_calls")) {
+            JsonArray toolCalls = resMsg["tool_calls"].as<JsonArray>();
+            serializeJson(toolCalls, result.toolCallsJson);
+            for (JsonObject tc : toolCalls) {
+                ToolCall t;
+                t.id = tc["id"].as<String>();
+                t.name = tc["function"]["name"].as<String>();
+                t.arguments = tc["function"]["arguments"].as<String>();
+                result.toolCalls.push_back(t);
+            }
+        }
     } else {
-        result = "Error: OpenAI request failed (" + String(httpResponseCode) + ")";
-        Serial.print("OpenAI Error: "); Serial.println(http.errorToString(httpResponseCode));
+        result.content = "Error: OpenAI request failed (" + String(httpResponseCode) + ")";
     }
     http.end();
     return result;
 }
 
-String AIHandler::callOpenRouter(String apiKey, String model) {
+AIResponse AIHandler::callOpenRouter(std::vector<AIMessage> messages, String apiKey, String model) {
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
@@ -80,111 +158,70 @@ String AIHandler::callOpenRouter(String apiKey, String model) {
     http.addHeader("HTTP-Referer", "http://esp32-agent.local");
 
     JsonDocument doc;
-    doc["model"] = model.length() > 0 ? model : "google/gemini-2.0-flash-001";
-    JsonArray messages = doc.createNestedArray("messages");
-    for (const auto& msg : _history) {
-        JsonObject m = messages.createNestedObject();
+    doc["model"] = model.length() > 0 ? model : "google/gemini-flash-1.5";
+    JsonArray msgs = doc.createNestedArray("messages");
+    for (const auto& msg : messages) {
+        JsonObject m = msgs.createNestedObject();
         m["role"] = msg.role;
-        m["content"] = msg.content;
+        if (msg.content.length() > 0) {
+            m["content"] = msg.content;
+        } else {
+            m["content"] = nullptr;
+        }
+
+        if (msg.role == "assistant" && msg.tool_calls_json.length() > 0) {
+            JsonDocument tcDoc;
+            deserializeJson(tcDoc, msg.tool_calls_json);
+            m["tool_calls"] = tcDoc.as<JsonArray>();
+        }
+
+        if (msg.role == "tool") {
+            m["tool_call_id"] = msg.tool_call_id;
+            m["name"] = msg.name;
+        }
     }
+
+    addTools(doc);
 
     String json;
     serializeJson(doc, json);
     int httpResponseCode = http.POST(json);
 
-    String result = "";
+    AIResponse result = {"", {}};
     if (httpResponseCode > 0) {
         String response = http.getString();
-        Serial.print("OpenRouter Response: "); Serial.println(response);
         JsonDocument resDoc;
-        DeserializationError error = deserializeJson(resDoc, response);
-        if (error) {
-            result = "Error: Failed to parse OpenRouter JSON (" + String(error.c_str()) + ")";
-        } else if (resDoc.containsKey("choices") && resDoc["choices"].is<JsonArray>() && resDoc["choices"].size() > 0) {
-            result = resDoc["choices"][0]["message"]["content"].as<String>();
-        } else {
-            result = "Error: Unexpected OpenRouter response structure";
+        deserializeJson(resDoc, response);
+        
+        JsonObject choice = resDoc["choices"][0];
+        JsonObject resMsg = choice["message"];
+        
+        if (resMsg.containsKey("content") && !resMsg["content"].isNull()) {
+            result.content = resMsg["content"].as<String>();
+        }
+
+        if (resMsg.containsKey("tool_calls")) {
+            JsonArray toolCalls = resMsg["tool_calls"].as<JsonArray>();
+            serializeJson(toolCalls, result.toolCallsJson);
+            for (JsonObject tc : toolCalls) {
+                ToolCall t;
+                t.id = tc["id"].as<String>();
+                t.name = tc["function"]["name"].as<String>();
+                t.arguments = tc["function"]["arguments"].as<String>();
+                result.toolCalls.push_back(t);
+            }
         }
     } else {
-        result = "Error: OpenRouter request failed (" + String(httpResponseCode) + ")";
-        Serial.print("OpenRouter Error: "); Serial.println(http.errorToString(httpResponseCode));
+        result.content = "Error: OpenRouter request failed (" + String(httpResponseCode) + ")";
     }
     http.end();
     return result;
 }
 
-String AIHandler::callGemini(String apiKey, String model) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    String modelName = model.length() > 0 ? model : "gemini-pro";
-    String url = "https://generativelanguage.googleapis.com/v1beta/models/" + modelName + ":generateContent?key=" + apiKey;
-    http.begin(client, url);
-    http.addHeader("Content-Type", "application/json");
-
-    JsonDocument doc;
-    JsonArray contents = doc.createNestedArray("contents");
-    for (const auto& msg : _history) {
-        JsonObject contentObj = contents.createNestedObject();
-        contentObj["role"] = (msg.role == "assistant") ? "model" : "user";
-        JsonArray parts = contentObj.createNestedArray("parts");
-        JsonObject partObj = parts.createNestedObject();
-        partObj["text"] = msg.content;
-    }
-
-    String json;
-    serializeJson(doc, json);
-    int httpResponseCode = http.POST(json);
-
-    String result = "";
-    if (httpResponseCode > 0) {
-        String response = http.getString();
-        Serial.print("Gemini Response: "); Serial.println(response);
-        JsonDocument resDoc;
-        deserializeJson(resDoc, response);
-        result = resDoc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
-    } else {
-        result = "Error: Gemini request failed (" + String(httpResponseCode) + ")";
-        Serial.print("Gemini Error: "); Serial.println(http.errorToString(httpResponseCode));
-    }
-    http.end();
-    return result;
+AIResponse AIHandler::callGemini(std::vector<AIMessage> messages, String apiKey, String model) {
+    return {"Gemini tool calling not implemented yet", {}};
 }
 
-String AIHandler::callClaude(String apiKey, String model) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    http.begin(client, "https://api.anthropic.com/v1/messages");
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("x-api-key", apiKey);
-    http.addHeader("anthropic-version", "2023-06-01");
-
-    JsonDocument doc;
-    doc["model"] = model.length() > 0 ? model : "claude-3-haiku-20240307";
-    doc["max_tokens"] = 1024;
-    JsonArray messages = doc.createNestedArray("messages");
-    for (const auto& msg : _history) {
-        JsonObject m = messages.createNestedObject();
-        m["role"] = msg.role;
-        m["content"] = msg.content;
-    }
-
-    String json;
-    serializeJson(doc, json);
-    int httpResponseCode = http.POST(json);
-
-    String result = "";
-    if (httpResponseCode > 0) {
-        String response = http.getString();
-        Serial.print("Claude Response: "); Serial.println(response);
-        JsonDocument resDoc;
-        deserializeJson(resDoc, response);
-        result = resDoc["content"][0]["text"].as<String>();
-    } else {
-        result = "Error: Claude request failed (" + String(httpResponseCode) + ")";
-        Serial.print("Claude Error: "); Serial.println(http.errorToString(httpResponseCode));
-    }
-    http.end();
-    return result;
+AIResponse AIHandler::callClaude(std::vector<AIMessage> messages, String apiKey, String model) {
+    return {"Claude tool calling not implemented yet", {}};
 }

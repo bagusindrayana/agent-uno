@@ -8,11 +8,17 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <WebServer.h>
+#include <time.h>
 #include "AIHandler.h"
 
 struct BotCommand {
     String command;
     String response;
+};
+
+struct BotProfile {
+    String botName;
+    String systemPrompt;
 };
 
 struct BotSettings {
@@ -24,6 +30,7 @@ struct BotSettings {
     String aiApiKey;
     String aiModel;
     long gmtOffsetSec;
+    BotProfile profile;
 };
 
 class BotAgent {
@@ -33,6 +40,8 @@ public:
     void loop();
     void saveSettings();
     void loadSettings();
+    void saveProfile();
+    void loadProfile();
     BotSettings& getSettings() { return _settings; }
 
 private:
@@ -43,10 +52,12 @@ private:
     AIHandler _aiHandler;
     unsigned long _lastBotCheck;
     int _botCheckInterval;
+    unsigned long _lastSystemInfoUpdate;
 
     void setupWiFi();
     void setupWebServer();
-    void setupTime();
+    void setupNTP();
+    String getSystemInfo();
     void handleTelegramMessages(int numNewMessages);
     
     // Web Server Handlers
@@ -55,6 +66,9 @@ private:
     void handleGetSettings();
     void handleAddCommand();
     void handleDeleteCommand();
+
+    // Tool Handlers
+    String executeTool(String functionName, String args);
 };
 
 #endif
