@@ -21,8 +21,8 @@ ai agent that run in esp32
 - [x] telegram bot
 - [x] ai chat
 - [x] ai memory
-- [ ] tool call
+- [x] tool call
     - [ ] web search
     - [ ] cronjob
-    - [ ] read/write file
+    - [x] read/write file
     - [ ] scrape web
