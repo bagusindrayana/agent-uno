@@ -126,6 +126,49 @@ static void addTools(JsonDocument& doc) {
     query4["description"] = "The search query (e.g. 'current weather in Jakarta', 'who is Leo Messi?')";
     JsonArray req4 = params4.createNestedArray("required");
     req4.add("query");
+
+    // Add Cron Job Tool
+    JsonObject tool5 = tools.createNestedObject();
+    tool5["type"] = "function";
+    JsonObject func5 = tool5.createNestedObject("function");
+    func5["name"] = "add_cron_job";
+    func5["description"] = "Schedule a recurring AI task. Minimal interval is 5 minutes.";
+    JsonObject params5 = func5.createNestedObject("parameters");
+    params5["type"] = "object";
+    JsonObject props5 = params5.createNestedObject("properties");
+    
+    JsonObject interval5 = props5.createNestedObject("intervalMinutes");
+    interval5["type"] = "integer";
+    interval5["description"] = "Interval in minutes (must be >= 5)";
+    
+    JsonObject prompt5 = props5.createNestedObject("prompt");
+    prompt5["type"] = "string";
+    prompt5["description"] = "The prompt to send to AI at each interval (e.g. 'Check BTC price and notify if > 60k')";
+    
+    JsonArray req5 = params5.createNestedArray("required");
+    req5.add("intervalMinutes");
+    req5.add("prompt");
+
+    // List Cron Jobs Tool
+    JsonObject tool6 = tools.createNestedObject();
+    tool6["type"] = "function";
+    JsonObject func6 = tool6.createNestedObject("function");
+    func6["name"] = "list_cron_jobs";
+    func6["description"] = "List all scheduled cron jobs.";
+
+    // Delete Cron Job Tool
+    JsonObject tool7 = tools.createNestedObject();
+    tool7["type"] = "function";
+    JsonObject func7 = tool7.createNestedObject("function");
+    func7["name"] = "delete_cron_job";
+    func7["description"] = "Delete a scheduled cron job by ID.";
+    JsonObject params7 = func7.createNestedObject("parameters");
+    params7["type"] = "object";
+    JsonObject props7 = params7.createNestedObject("properties");
+    JsonObject id7 = props7.createNestedObject("id");
+    id7["type"] = "integer";
+    JsonArray req7 = params7.createNestedArray("required");
+    req7.add("id");
 }
 
 AIResponse AIHandler::callOpenAI(std::vector<AIMessage> messages, String apiKey, String model) {
@@ -204,7 +247,7 @@ AIResponse AIHandler::callOpenRouter(std::vector<AIMessage> messages, String api
     http.begin(client, "https://openrouter.ai/api/v1/chat/completions");
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", "Bearer " + apiKey);
-    http.addHeader("HTTP-Referer", "http://esp32-agent.local");
+    //http.addHeader("HTTP-Referer", "http://esp32-agent.local");
 
     JsonDocument doc;
     doc["model"] = model.length() > 0 ? model : "google/gemini-flash-1.5";

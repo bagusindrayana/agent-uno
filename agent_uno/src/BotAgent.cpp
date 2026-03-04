@@ -226,6 +226,45 @@ String BotAgent::executeTool(String functionName, String args) {
             return err;
         }
     }
+    else if (functionName == "add_cron_job") {
+        int interval = doc["intervalMinutes"].as<int>();
+        String prompt = doc["prompt"].as<String>();
+        
+        if (interval < 5) interval = 5; // Enforce 5 min minimum
+        
+        int newId = 1;
+        if (_settings.cronJobs.size() > 0) {
+            newId = _settings.cronJobs.back().id + 1;
+        }
+        
+        _settings.cronJobs.push_back({newId, interval, prompt, millis()});
+        saveSettings();
+        return "Cron Job #" + String(newId) + " added (every " + String(interval) + " min).";
+    }
+    else if (functionName == "list_cron_jobs") {
+        if (_settings.cronJobs.empty()) return "No cron jobs scheduled.";
+        String list = "Scheduled Cron Jobs:\n";
+        for (const auto& job : _settings.cronJobs) {
+            list += "- #" + String(job.id) + ": Every " + String(job.intervalMinutes) + "m | Prompt: " + job.prompt + "\n";
+        }
+        return list;
+    }
+    else if (functionName == "delete_cron_job") {
+        int id = doc["id"].as<int>();
+        bool found = false;
+        for (auto it = _settings.cronJobs.begin(); it != _settings.cronJobs.end(); ++it) {
+            if (it->id == id) {
+                _settings.cronJobs.erase(it);
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            saveSettings();
+            return "Cron Job #" + String(id) + " deleted.";
+        }
+        return "Error: Cron Job #" + String(id) + " not found.";
+    }
 
     return "Error: Unknown tool";
 }
@@ -279,11 +318,23 @@ void BotAgent::loadSettings() {
     _settings.gmtOffsetSec = doc["gmtOffsetSec"] | 25200; // Default to UTC+7 (Jakarta)
     _settings.searchProvider = (SearchProvider)(doc["searchProvider"] | 0);
     _settings.searchApiKey = doc["searchApiKey"].as<String>();
+    _settings.adminChatId = doc["adminChatId"].as<String>();
 
     JsonArray cmds = doc["commands"].as<JsonArray>();
     _settings.dynamicCommands.clear();
     for (JsonObject cmd : cmds) {
         _settings.dynamicCommands.push_back({cmd["command"].as<String>(), cmd["response"].as<String>()});
+    }
+
+    JsonArray jobs = doc["cronJobs"].as<JsonArray>();
+    _settings.cronJobs.clear();
+    for (JsonObject job : jobs) {
+        _settings.cronJobs.push_back({
+            job["id"].as<int>(),
+            job["intervalMinutes"].as<int>(),
+            job["prompt"].as<String>(),
+            0 // reset lastRun on boot
+        });
     }
 
     file.close();
@@ -306,12 +357,21 @@ void BotAgent::saveSettings() {
     doc["gmtOffsetSec"] = _settings.gmtOffsetSec;
     doc["searchProvider"] = (int)_settings.searchProvider;
     doc["searchApiKey"] = _settings.searchApiKey;
+    doc["adminChatId"] = _settings.adminChatId;
 
     JsonArray cmds = doc.createNestedArray("commands");
     for (const auto& cmd : _settings.dynamicCommands) {
         JsonObject obj = cmds.createNestedObject();
         obj["command"] = cmd.command;
         obj["response"] = cmd.response;
+    }
+
+    JsonArray jobs = doc.createNestedArray("cronJobs");
+    for (const auto& job : _settings.cronJobs) {
+        JsonObject obj = jobs.createNestedObject();
+        obj["id"] = job.id;
+        obj["intervalMinutes"] = job.intervalMinutes;
+        obj["prompt"] = job.prompt;
     }
 
     if (serializeJson(doc, file) == 0) {
@@ -361,6 +421,7 @@ void BotAgent::setupWebServer() {
 
 void BotAgent::loop() {
     _server.handleClient();
+    checkCronJobs();
 
     if (_bot && millis() > _lastBotCheck + _botCheckInterval) {
         int numNewMessages = _bot->getUpdates(_bot->last_message_received + 1);
@@ -372,11 +433,38 @@ void BotAgent::loop() {
     }
 }
 
+void BotAgent::checkCronJobs() {
+    if (_settings.adminChatId.length() == 0) return;
+
+    for (auto& job : _settings.cronJobs) {
+        unsigned long intervalMillis = (unsigned long)job.intervalMinutes * 60000;
+        if (millis() - job.lastRunMillis >= intervalMillis) {
+            job.lastRunMillis = millis();
+            
+            Serial.print("Executing Cron Job ID: "); Serial.println(job.id);
+            
+            String fullSystemPrompt = _settings.profile.systemPrompt + "\n\n" + getSystemInfo();
+            AIResponse aiRes = _aiHandler.getResponse(job.prompt, fullSystemPrompt, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
+            
+            if (aiRes.content.length() > 0) {
+                String notification = "🕒 <b>Cron Job #" + String(job.id) + " Triggered</b>\n\n" + aiRes.content;
+                _bot->sendMessage(_settings.adminChatId, notification, "HTML");
+            }
+        }
+    }
+}
+
 void BotAgent::handleTelegramMessages(int numNewMessages) {
     for (int i = 0; i < numNewMessages; i++) {
         String text = _bot->messages[i].text;
         String chatId = _bot->messages[i].chat_id;
         String fromName = _bot->messages[i].from_name;
+
+        // Set adminChatId to the first person who talks to it if not set
+        if (_settings.adminChatId.length() == 0) {
+            _settings.adminChatId = chatId;
+            saveSettings();
+        }
 
         // Serial Log for incoming message
         Serial.print("\n--- New Telegram Message ---\n");

@@ -21,17 +21,26 @@ struct BotProfile {
     String systemPrompt;
 };
 
+struct CronJob {
+    int id;
+    int intervalMinutes;
+    String prompt;
+    unsigned long lastRunMillis;
+};
+
 struct BotSettings {
     String wifiSSID;
     String wifiPassword;
     String botToken;
     std::vector<BotCommand> dynamicCommands;
+    std::vector<CronJob> cronJobs;
     AIProvider aiProvider;
     String aiApiKey;
     String aiModel;
     long gmtOffsetSec;
     SearchProvider searchProvider;
     String searchApiKey;
+    String adminChatId;
     BotProfile profile;
 };
 
@@ -59,6 +68,7 @@ private:
     void setupWiFi();
     void setupWebServer();
     void setupNTP();
+    void checkCronJobs();
     String getSystemInfo();
     void handleTelegramMessages(int numNewMessages);
     
