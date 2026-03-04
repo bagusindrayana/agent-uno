@@ -227,25 +227,33 @@ String BotAgent::executeTool(String functionName, String args) {
         }
     }
     else if (functionName == "add_cron_job") {
-        int interval = doc["intervalMinutes"].as<int>();
+        int interval = doc["intervalMinutes"] | 0;
+        String scheduledTime = doc["scheduledTime"] | "";
         String prompt = doc["prompt"].as<String>();
         
-        if (interval < 5) interval = 5; // Enforce 5 min minimum
+        if (interval > 0 && interval < 5) interval = 5; // Minimal 5 menit
         
         int newId = 1;
         if (_settings.cronJobs.size() > 0) {
             newId = _settings.cronJobs.back().id + 1;
         }
         
-        _settings.cronJobs.push_back({newId, interval, prompt, millis()});
+        _settings.cronJobs.push_back({newId, interval, scheduledTime, prompt, millis(), -1});
         saveSettings();
-        return "Cron Job #" + String(newId) + " added (every " + String(interval) + " min).";
+        
+        String msg = "Cron Job #" + String(newId) + " added.";
+        if (scheduledTime.length() > 0) msg += " Time: " + scheduledTime;
+        else msg += " Interval: " + String(interval) + " min";
+        return msg;
     }
     else if (functionName == "list_cron_jobs") {
         if (_settings.cronJobs.empty()) return "No cron jobs scheduled.";
         String list = "Scheduled Cron Jobs:\n";
         for (const auto& job : _settings.cronJobs) {
-            list += "- #" + String(job.id) + ": Every " + String(job.intervalMinutes) + "m | Prompt: " + job.prompt + "\n";
+            list += "- #" + String(job.id) + ": ";
+            if (job.scheduledTime.length() > 0) list += "Time " + job.scheduledTime;
+            else list += "Every " + String(job.intervalMinutes) + "m";
+            list += " | Prompt: " + job.prompt + "\n";
         }
         return list;
     }
@@ -332,8 +340,10 @@ void BotAgent::loadSettings() {
         _settings.cronJobs.push_back({
             job["id"].as<int>(),
             job["intervalMinutes"].as<int>(),
+            job["scheduledTime"] | "",
             job["prompt"].as<String>(),
-            0 // reset lastRun on boot
+            0, // reset lastRun on boot
+            -1 // reset lastRunDay
         });
     }
 
@@ -371,6 +381,7 @@ void BotAgent::saveSettings() {
         JsonObject obj = jobs.createNestedObject();
         obj["id"] = job.id;
         obj["intervalMinutes"] = job.intervalMinutes;
+        obj["scheduledTime"] = job.scheduledTime;
         obj["prompt"] = job.prompt;
     }
 
@@ -436,13 +447,32 @@ void BotAgent::loop() {
 void BotAgent::checkCronJobs() {
     if (_settings.adminChatId.length() == 0) return;
 
+    struct tm timeinfo;
+    bool hasTime = getLocalTime(&timeinfo);
+    char currentHM[6];
+    if (hasTime) strftime(currentHM, sizeof(currentHM), "%H:%M", &timeinfo);
+
     for (auto& job : _settings.cronJobs) {
-        unsigned long intervalMillis = (unsigned long)job.intervalMinutes * 60000;
-        if (millis() - job.lastRunMillis >= intervalMillis) {
-            job.lastRunMillis = millis();
-            
+        bool shouldTrigger = false;
+
+        // Cek berdasarkan jam spesifik (misal 03:00)
+        if (hasTime && job.scheduledTime.length() > 0) {
+            if (job.scheduledTime == String(currentHM) && job.lastRunDay != timeinfo.tm_mday) {
+                shouldTrigger = true;
+                job.lastRunDay = timeinfo.tm_mday;
+            }
+        } 
+        // Cek berdasarkan interval menit
+        else if (job.intervalMinutes >= 5) {
+            unsigned long intervalMillis = (unsigned long)job.intervalMinutes * 60000;
+            if (millis() - job.lastRunMillis >= intervalMillis) {
+                shouldTrigger = true;
+                job.lastRunMillis = millis();
+            }
+        }
+
+        if (shouldTrigger) {
             Serial.print("Executing Cron Job ID: "); Serial.println(job.id);
-            
             String fullSystemPrompt = _settings.profile.systemPrompt + "\n\n" + getSystemInfo();
             AIResponse aiRes = _aiHandler.getResponse(job.prompt, fullSystemPrompt, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
             

@@ -23,9 +23,11 @@ struct BotProfile {
 
 struct CronJob {
     int id;
-    int intervalMinutes;
+    int intervalMinutes; // Jika > 0, gunakan interval
+    String scheduledTime; // Format "HH:MM", jika tidak kosong gunakan waktu dinding
     String prompt;
     unsigned long lastRunMillis;
+    int lastRunDay; // Untuk mencegah trigger berulang di menit yang sama
 };
 
 struct BotSettings {

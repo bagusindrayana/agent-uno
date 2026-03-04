@@ -132,21 +132,24 @@ static void addTools(JsonDocument& doc) {
     tool5["type"] = "function";
     JsonObject func5 = tool5.createNestedObject("function");
     func5["name"] = "add_cron_job";
-    func5["description"] = "Schedule a recurring AI task. Minimal interval is 5 minutes.";
+    func5["description"] = "Schedule a recurring AI task. Minimal interval is 5 minutes. You can also set a specific time (HH:MM). Always provide a final natural language response to the user after calling this tool.";
     JsonObject params5 = func5.createNestedObject("parameters");
     params5["type"] = "object";
     JsonObject props5 = params5.createNestedObject("properties");
     
     JsonObject interval5 = props5.createNestedObject("intervalMinutes");
     interval5["type"] = "integer";
-    interval5["description"] = "Interval in minutes (must be >= 5)";
+    interval5["description"] = "Interval in minutes (must be >= 5). Set to 0 if using scheduledTime.";
     
+    JsonObject scheduledTime5 = props5.createNestedObject("scheduledTime");
+    scheduledTime5["type"] = "string";
+    scheduledTime5["description"] = "Specific time in 24-hour format 'HH:MM' (e.g. '03:00'). Use this for 'every day at X time'.";
+
     JsonObject prompt5 = props5.createNestedObject("prompt");
     prompt5["type"] = "string";
     prompt5["description"] = "The prompt to send to AI at each interval (e.g. 'Check BTC price and notify if > 60k')";
     
     JsonArray req5 = params5.createNestedArray("required");
-    req5.add("intervalMinutes");
     req5.add("prompt");
 
     // List Cron Jobs Tool
