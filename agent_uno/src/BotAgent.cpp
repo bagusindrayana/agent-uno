@@ -327,6 +327,8 @@ void BotAgent::loadSettings() {
     _settings.searchProvider = (SearchProvider)(doc["searchProvider"] | 0);
     _settings.searchApiKey = doc["searchApiKey"].as<String>();
     _settings.adminChatId = doc["adminChatId"].as<String>();
+    // ArduinoJson returns "null" string for missing/null fields
+    if (_settings.adminChatId == "null") _settings.adminChatId = "";
 
     JsonArray cmds = doc["commands"].as<JsonArray>();
     _settings.dynamicCommands.clear();
@@ -445,7 +447,10 @@ void BotAgent::loop() {
 }
 
 void BotAgent::checkCronJobs() {
-    if (_settings.adminChatId.length() == 0) return;
+    if (_settings.adminChatId.length() == 0 || _settings.adminChatId == "null") {
+        Serial.println("Cron skipped: adminChatId is empty or null");
+        return;
+    }
 
     struct tm timeinfo;
     bool hasTime = getLocalTime(&timeinfo);
@@ -456,10 +461,25 @@ void BotAgent::checkCronJobs() {
         bool shouldTrigger = false;
 
         // Cek berdasarkan jam spesifik (misal 03:00)
-        if (hasTime && job.scheduledTime.length() > 0) {
-            if (job.scheduledTime == String(currentHM) && job.lastRunDay != timeinfo.tm_mday) {
-                shouldTrigger = true;
-                job.lastRunDay = timeinfo.tm_mday;
+        if (hasTime && job.scheduledTime.length() >= 5) {
+            int schedH = job.scheduledTime.substring(0, 2).toInt();
+            int schedM = job.scheduledTime.substring(3, 5).toInt();
+            int schedTotalM = schedH * 60 + schedM;
+            int currTotalM = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+
+            if (job.lastRunDay != timeinfo.tm_mday) {
+                if (currTotalM >= schedTotalM) {
+                    // Cek selisih waktu terlewat (jika terlewat max 2 jam, tetap jalankan)
+                    // Jika > 2 jam, anggap sudah basi (misal baru reboot/dibuat), jadwalkan besoknya
+                    // if (currTotalM - schedTotalM <= 120) {
+                    //     shouldTrigger = true;
+                    // }
+
+                    if (currTotalM - schedTotalM <= 10) {
+                        shouldTrigger = true;
+                    }
+                    job.lastRunDay = timeinfo.tm_mday;
+                }
             }
         } 
         // Cek berdasarkan interval menit
@@ -477,8 +497,28 @@ void BotAgent::checkCronJobs() {
             AIResponse aiRes = _aiHandler.getResponse(job.prompt, fullSystemPrompt, _settings.aiProvider, _settings.aiApiKey, _settings.aiModel);
             
             if (aiRes.content.length() > 0) {
-                String notification = "🕒 <b>Cron Job #" + String(job.id) + " Triggered</b>\n\n" + aiRes.content;
-                _bot->sendMessage(_settings.adminChatId, notification, "HTML");
+                Serial.println(aiRes.content);
+                String notification = "🕒 *Cron Job #" + String(job.id) + " Triggered*\n\n" + aiRes.content;
+                Serial.println("Sending to chatId: " + _settings.adminChatId);
+                Serial.println("Message length: " + String(notification.length()));
+                bool success = _bot->sendMessage(_settings.adminChatId, notification, "Markdown");
+                if(success){
+                    Serial.println("Cron Job #" + String(job.id) + " triggered successfully");
+                } else {
+                    Serial.println("Cron Job #" + String(job.id) + " failed to send message");
+                    Serial.println("  AdminChatId: [" + _settings.adminChatId + "]");
+                    Serial.println("  Msg preview: " + notification.substring(0, min((int)notification.length(), 200)));
+                    // Retry tanpa formatting jika Markdown juga gagal
+                    String plainNotification = "Cron Job #" + String(job.id) + " Triggered\n\n" + aiRes.content;
+                    bool retry = _bot->sendMessage(_settings.adminChatId, plainNotification, "");
+                    if (retry) {
+                        Serial.println("  Retry (plain text) succeeded!");
+                    } else {
+                        Serial.println("  Retry (plain text) also failed!");
+                    }
+                }
+            } else {
+                Serial.println("Cron Job #" + String(job.id) + " failed to trigger");
             }
         }
     }
@@ -542,7 +582,8 @@ void BotAgent::handleTelegramMessages(int numNewMessages) {
             Serial.println("Command /help or /start detected!");
             String help = "🆘 <b>Available Commands</b>\n\n";
             help += "• <code>/status</code> - ESP32 stats & uptime\n";
-            help += "• <code>/help</code> - Show this list\n\n";
+            help += "• <code>/help</code> - Show this list\n";
+            help += "• <code>/clear</code> - Clear chat history\n\n";
             
             if (_settings.dynamicCommands.size() > 0) {
                 help += "⚙️ <b>Dynamic Commands</b>\n";
