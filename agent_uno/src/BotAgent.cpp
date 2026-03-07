@@ -448,7 +448,7 @@ void BotAgent::loop() {
 
 void BotAgent::checkCronJobs() {
     if (_settings.adminChatId.length() == 0 || _settings.adminChatId == "null") {
-        Serial.println("Cron skipped: adminChatId is empty or null");
+        //Serial.println("Cron skipped: adminChatId is empty or null");
         return;
     }
 

@@ -22,5 +22,5 @@ void loop() {
     // If you want to access current settings:
     // BotSettings& current = agent.getSettings();
 
-    delay(100); 
+    delay(200); 
 }
